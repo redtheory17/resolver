@@ -1,0 +1,33 @@
+from pathlib import Path
+
+from gi.repository import GObject, Gio, Nautilus
+
+
+class ResolveReadyMenuProvider(GObject.GObject, Nautilus.MenuProvider):
+    def get_file_items(self, *args):
+        # Nautilus 43+ passes only files; older Nautilus also passes a window.
+        files = args[-1]
+        selected = []
+        for item in files:
+            location = item.get_location()
+            path = location.get_path() if location else None
+            if path and item.get_mime_type().startswith("video/"):
+                selected.append(path)
+        if not selected:
+            return []
+
+        menu_item = Nautilus.MenuItem(
+            name="ResolveReady::resolve",
+            label="Resolving",
+        )
+        menu_item.connect("activate", self._activate, selected)
+        return [menu_item]
+
+    def get_background_items(self, *_args):
+        return []
+
+    def _activate(self, _menu, selected):
+        Gio.Subprocess.new(
+            [@EXECUTABLE_REPR@, *selected],
+            Gio.SubprocessFlags.NONE,
+        )

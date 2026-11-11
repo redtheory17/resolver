@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Service
+Name=Resolving
+MimeType=video/*;
+Actions=resolveReady;
+X-KDE-ServiceTypes=KonqPopupMenu/Plugin
+X-KDE-Priority=TopLevel
+
+[Desktop Action resolveReady]
+Name=Resolving
+Icon=resolve-ready
+Exec=@EXECUTABLE@ %F

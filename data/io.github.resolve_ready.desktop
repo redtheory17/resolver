@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Resolve Ready
+GenericName=Resolve-compatible video converter
+Comment=Convert video audio for DaVinci Resolve without re-encoding the picture
+Icon=resolve-ready
+Exec=resolve-ready %F
+MimeType=video/mp4;video/x-matroska;video/quicktime;video/webm;video/x-msvideo;video/mpeg;video/mp2t;
+Categories=AudioVideo;AudioVideoEditing;
+Terminal=false
+StartupNotify=true
