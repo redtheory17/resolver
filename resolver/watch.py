@@ -2,7 +2,7 @@
 
 Resolve has no import hook, so this polls the open project's media pool through
 the scripting API. A clip that was added after the watcher started and whose
-audio Resolve cannot decode on Linux is converted with the normal Resolve Ready
+audio Resolve cannot decode on Linux is converted with the normal Resolver
 conversion, then refreshed in place with ``MediaPoolItem.ReplaceClip``.
 
 Resolve remembers a failed audio decoder per file path until the project is
@@ -26,7 +26,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Iterable
 
-from resolver.core import BACKUP_DIRECTORY_NAME, Converter, ResolverError, require_tools
+from resolver.core import (
+    BACKUP_DIRECTORY_NAME,
+    LEGACY_BACKUP_DIRECTORY_NAME,
+    Converter,
+    ResolverError,
+    require_tools,
+)
 
 # Measured on Resolve Studio 21.2 for Linux by rendering one test clip per codec:
 # these decode; AAC, AC-3, E-AC-3 and DTS come in silent.
@@ -78,7 +84,8 @@ def parse_date_added(value: str) -> float | None:
 
 
 def is_backup_path(path: str | os.PathLike[str]) -> bool:
-    return BACKUP_DIRECTORY_NAME in Path(path).parts
+    parts = Path(path).parts
+    return BACKUP_DIRECTORY_NAME in parts or LEGACY_BACKUP_DIRECTORY_NAME in parts
 
 
 def replacement_path(clip_path: str, converted: Path) -> str:
@@ -175,11 +182,11 @@ class WatchReport:
         return not (self.converted or self.need_reopen or self.failed)
 
     def summary(self) -> tuple[str, str]:
-        title = "Resolve Ready"
+        title = "Resolver"
         lines = []
         if self.converted:
             count = len(self.converted)
-            title = f"Resolve Ready converted {count} imported clip{'s' if count != 1 else ''}"
+            title = f"Resolver converted {count} imported clip{'s' if count != 1 else ''}"
             lines.append(", ".join(self.converted[:4]) + ("…" if count > 4 else ""))
         if self.need_reopen:
             lines.append(
@@ -197,7 +204,7 @@ def desktop_notify(title: str, body: str) -> None:
     notify_send = shutil.which("notify-send")
     if notify_send:
         commands.append(
-            [notify_send, "--app-name=Resolve Ready", "--icon=resolve-ready", title, body]
+            [notify_send, "--app-name=Resolver", "--icon=resolver", title, body]
         )
     gdbus = shutil.which("gdbus")
     if gdbus:
@@ -210,9 +217,9 @@ def desktop_notify(title: str, body: str) -> None:
                 "--dest=org.freedesktop.Notifications",
                 "--object-path=/org/freedesktop/Notifications",
                 "--method=org.freedesktop.Notifications.Notify",
-                "Resolve Ready",
+                "Resolver",
                 "0",
-                "resolve-ready",
+                "resolver",
                 json.dumps(title, ensure_ascii=False),
                 json.dumps(body, ensure_ascii=False),
                 "[]",
@@ -454,12 +461,12 @@ def _acquire_lock(handle, resolve_pid: int | None, wait: float = LOCK_WAIT_SECON
 def watch_resolve(resolve_pid: int | None = None) -> int:
     """Run until Resolve (``resolve_pid``) exits. Returns a process exit code."""
     runtime = Path(os.environ.get("XDG_RUNTIME_DIR") or "/tmp")
-    lock_handle = (runtime / "resolve-ready-watch.lock").open("w")
+    lock_handle = (runtime / "resolver-watch.lock").open("w")
     if not _acquire_lock(lock_handle, resolve_pid):
         return 0  # another watcher already serves this session
 
     state = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state")
-    log_path = state / "resolve-ready" / "watch.log"
+    log_path = state / "resolver" / "watch.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
     log_lock = threading.Lock()
 
@@ -478,7 +485,7 @@ def watch_resolve(resolve_pid: int | None = None) -> int:
         )
     except ResolverError as exc:
         log(str(exc))
-        print(f"resolve-ready: {exc}", file=sys.stderr)
+        print(f"resolver: {exc}", file=sys.stderr)
         return 1
 
     if resolve_pid is None:

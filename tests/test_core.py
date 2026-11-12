@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 from resolver.core import (
     BACKUP_DIRECTORY_NAME,
+    LEGACY_BACKUP_DIRECTORY_NAME,
     MediaInfo,
     ResolverError,
     _extract_ffmpeg_error,
@@ -118,6 +119,22 @@ class OutputNamingTests(unittest.TestCase):
             self.assertEqual(backup.parent.name, BACKUP_DIRECTORY_NAME)
             self.assertEqual(backup.read_bytes(), b"original")
             self.assertFalse(temporary.exists())
+
+    def test_folder_with_backups_from_before_the_rename_keeps_using_them(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "clip.mp4"
+            temporary = Path(directory) / ".clip.partial.mp4"
+            legacy = Path(directory) / LEGACY_BACKUP_DIRECTORY_NAME
+            legacy.mkdir()
+            (legacy / "clip_backup.mp4").write_bytes(b"older backup")
+            source.write_bytes(b"original")
+            temporary.write_bytes(b"converted")
+
+            backup = _publish_mov(temporary, source, source)
+
+            self.assertEqual(backup, legacy / "clip_backup_2.mp4")
+            self.assertEqual(backup.read_bytes(), b"original")
+            self.assertFalse((Path(directory) / BACKUP_DIRECTORY_NAME).exists())
 
     def test_publish_does_not_overwrite_existing_backup(self):
         with tempfile.TemporaryDirectory() as directory:

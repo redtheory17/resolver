@@ -1,1 +1,1 @@
-"""Resolve Ready tests."""
+"""Resolver tests."""

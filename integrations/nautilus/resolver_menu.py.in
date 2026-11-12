@@ -3,7 +3,7 @@ from pathlib import Path
 from gi.repository import GObject, Gio, Nautilus
 
 
-class ResolveReadyMenuProvider(GObject.GObject, Nautilus.MenuProvider):
+class ResolverMenuProvider(GObject.GObject, Nautilus.MenuProvider):
     def get_file_items(self, *args):
         # Nautilus 43+ passes only files; older Nautilus also passes a window.
         files = args[-1]
@@ -17,7 +17,7 @@ class ResolveReadyMenuProvider(GObject.GObject, Nautilus.MenuProvider):
             return []
 
         menu_item = Nautilus.MenuItem(
-            name="ResolveReady::resolve",
+            name="Resolver::resolve",
             label="Resolving",
         )
         menu_item.connect("activate", self._activate, selected)

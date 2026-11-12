@@ -2,7 +2,7 @@
 Name=Resolving
 Comment=Repair audio in place for Resolve and keep an untouched backup
 Exec=@EXECUTABLE@ %F
-Icon-Name=resolve-ready
+Icon-Name=resolver
 Selection=Any
 Mimetypes=video/*;
 Quote=double

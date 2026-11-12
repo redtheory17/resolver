@@ -34,12 +34,12 @@ def _load_gtk():
     return Gdk, Gio, GLib, Gtk
 
 
-class ResolveReadyApplication:
+class ResolverApplication:
     def __init__(self):
         self.Gdk, self.Gio, self.GLib, self.Gtk = _load_gtk()
         flags = self.Gio.ApplicationFlags.HANDLES_OPEN
         self.application = self.Gtk.Application(
-            application_id="io.github.resolve_ready",
+            application_id="io.github.redtheory17.resolver",
             flags=flags,
         )
         self.application.connect("activate", self._on_activate)
@@ -83,7 +83,7 @@ class ResolveReadyApplication:
         Gtk = self.Gtk
         self._load_css()
         self.window = Gtk.ApplicationWindow(application=self.application)
-        self.window.set_title("Resolve Ready")
+        self.window.set_title("Resolver")
         self.window.set_default_size(760, 620)
         self.window.set_size_request(560, 440)
 
@@ -93,7 +93,7 @@ class ResolveReadyApplication:
         header = Gtk.HeaderBar()
         header.set_show_title_buttons(True)
         title_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
-        title = Gtk.Label(label="Resolve Ready")
+        title = Gtk.Label(label="Resolver")
         title.add_css_class("title")
         subtitle = Gtk.Label(label="Resolve-friendly video and audio.")
         subtitle.add_css_class("caption")
@@ -400,7 +400,7 @@ class ResolveReadyApplication:
         item.progress_bar.set_fraction(1.0)
         item.row.add_css_class("success")
         self._refresh_summary()
-        self._notify("Resolve-ready file complete", result.path.name)
+        self._notify("Ready for Resolve", result.path.name)
 
     def _mark_failed(self, item: QueueItem, message: str):
         item.state = "failed"
@@ -437,7 +437,7 @@ class ResolveReadyApplication:
             modal=True,
             buttons=self.Gtk.ButtonsType.CLOSE,
             message_type=self.Gtk.MessageType.ERROR,
-            text="Resolve Ready could not start",
+            text="Resolver could not start",
             secondary_text=message,
         )
         dialog.connect("response", lambda window, _response: window.destroy())
@@ -446,7 +446,7 @@ class ResolveReadyApplication:
     def _notify(self, title: str, body: str):
         notification = self.Gio.Notification.new(title)
         notification.set_body(body)
-        notification.set_icon(self.Gio.ThemedIcon.new("resolve-ready"))
+        notification.set_icon(self.Gio.ThemedIcon.new("resolver"))
         self.application.send_notification(None, notification)
 
 
@@ -470,13 +470,13 @@ def _headless_convert(paths: list[Path]) -> int:
             )
         return 0
     except (ResolverError, KeyboardInterrupt) as exc:
-        print(f"resolve-ready: {exc}", file=sys.stderr)
+        print(f"resolver: {exc}", file=sys.stderr)
         return 1
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="resolve-ready",
+        prog="resolver",
         description=(
             "Create a Resolve-compatible file with PCM audio (MP4 and MOV keep "
             "their name, other containers become MOV), transcoding video to DNxHR "
@@ -516,13 +516,13 @@ def main(argv: list[str] | None = None) -> int:
         return _headless_convert(args.videos)
 
     try:
-        app = ResolveReadyApplication()
+        app = ResolverApplication()
         # Passing paths through GApplication also forwards them correctly when an
         # already-running instance receives a file-manager context-menu action.
         gtk_argv = [sys.argv[0], *(str(path.expanduser().resolve()) for path in args.videos)]
         return app.run(gtk_argv)
     except ResolverError as exc:
-        print(f"resolve-ready: {exc}", file=sys.stderr)
+        print(f"resolver: {exc}", file=sys.stderr)
         return 1
 
 

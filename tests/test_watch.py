@@ -9,7 +9,12 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from resolver.core import BACKUP_DIRECTORY_NAME, ConversionResult, ResolverError
+from resolver.core import (
+    BACKUP_DIRECTORY_NAME,
+    LEGACY_BACKUP_DIRECTORY_NAME,
+    ConversionResult,
+    ResolverError,
+)
 from resolver.watch import (
     _acquire_lock,
     DecodeFailureLog,
@@ -48,6 +53,7 @@ class RuleTests(unittest.TestCase):
 
     def test_backup_folder_is_never_touched(self):
         self.assertTrue(is_backup_path(f"/media/{BACKUP_DIRECTORY_NAME}/a_backup.mp4"))
+        self.assertTrue(is_backup_path(f"/media/{LEGACY_BACKUP_DIRECTORY_NAME}/a_backup.mp4"))
         self.assertFalse(is_backup_path("/media/a.mp4"))
 
     def test_replacement_keeps_the_directory_resolve_knows(self):

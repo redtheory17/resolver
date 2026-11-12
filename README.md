@@ -1,11 +1,11 @@
-# Resolve Ready
+# Resolver
 
 **Fix silent clips in DaVinci Resolve on Linux — without re-encoding the picture,
 without renaming the file, and optionally without lifting a finger.**
 
 Phone footage, screen recordings, drone clips and most camera MP4s carry AAC
 audio. DaVinci Resolve on Linux cannot decode AAC, so those clips import with a
-picture and a flat, silent audio track. Resolve Ready rewrites just the audio to
+picture and a flat, silent audio track. Resolver rewrites just the audio to
 uncompressed PCM, which Resolve plays everywhere, and leaves the video stream
 bit-for-bit untouched. It can do that from a small app, from the file manager's
 right-click menu, or automatically the moment a clip is imported into Resolve.
@@ -29,7 +29,7 @@ its own FFmpeg build with the AAC decoder compiled out
 in the first place, so installing codecs on the system has no effect. Resolve
 also gives no warning: the clip's metadata happily reports "AAC, 2 channels".
 
-## How Resolve Ready solves it
+## How Resolver solves it
 
 It fixes the file instead of the application:
 
@@ -46,15 +46,15 @@ It fixes the file instead of the application:
   references the file stays linked, on your machine and for collaborators who
   open the same media.
 - **The original is never lost.** It moves into a hidden
-  `.resolve-ready-backups/` folder beside the file.
+  `.resolver-backups/` folder beside the file.
 - **It can happen on import.** A watcher notices clips as they land in Resolve's
   media pool, converts the ones that would be silent, and refreshes them in
   place — typically within a few seconds for short clips.
 
 ```text
 footage/
-├── interview.mp4                         (Resolve-ready media, same name)
-└── .resolve-ready-backups/
+├── interview.mp4                         (converted media, same name)
+└── .resolver-backups/
     └── interview_backup.mp4              (untouched source)
 ```
 
@@ -82,10 +82,13 @@ sudo pacman -S ffmpeg python-gobject gtk4
 Install for the current user:
 
 ```bash
-git clone https://github.com/redtheory17/resolve-ready.git
-cd resolve-ready
+git clone https://github.com/redtheory17/resolver.git
+cd resolver
 ./scripts/install.sh
 ```
+
+If an earlier version was installed under its old name, Resolve Ready, the
+installer removes it.
 
 The installer adds the app to your launcher and a **Resolving** action to the
 right-click menu of Dolphin, Nemo and Nautilus (Nautilus also needs its
@@ -97,25 +100,25 @@ action does not appear immediately.
 **From the file manager** — right-click one or more videos and choose
 **Resolving**. Conversion starts immediately.
 
-**From the app** — open **Resolve Ready**, drag videos in, and start the queue.
+**From the app** — open **Resolver**, drag videos in, and start the queue.
 
 **From a terminal**
 
 ```bash
-resolve-ready --no-gui recording.mp4 another.mkv
+resolver --no-gui recording.mp4 another.mkv
 ```
 
 **Without installing**
 
 ```bash
-./bin/resolve-ready
-./bin/resolve-ready --no-gui recording.mkv
+./bin/resolver
+./bin/resolver --no-gui recording.mkv
 ```
 
 ## Convert automatically on import
 
 ```bash
-resolve-ready --watch-resolve --resolve-pid <pid of Resolve>
+resolver --watch-resolve --resolve-pid <pid of Resolve>
 ```
 
 Resolve has no import hook, so the watcher polls the open project's media pool
@@ -128,7 +131,7 @@ and stops with Resolve:
 
 ```bash
 #!/usr/bin/env bash
-"$HOME/.local/bin/resolve-ready" --watch-resolve --resolve-pid $$ >/dev/null 2>&1 &
+"$HOME/.local/bin/resolver" --watch-resolve --resolve-pid $$ >/dev/null 2>&1 &
 exec /opt/resolve/bin/resolve "$@"
 ```
 
@@ -142,7 +145,7 @@ What it does and does not touch:
   already in a project are never converted behind your back.
 - A clip is converted when it has audio in MKV or WebM, or any audio codec other
   than PCM, MP3, FLAC, ALAC or Opus.
-- Nothing inside `.resolve-ready-backups/` is ever converted.
+- Nothing inside `.resolver-backups/` is ever converted.
 - Files on read-only media cannot be converted; you get a notification instead.
 
 It is cheap to leave running. Bins whose clip count has not changed are skipped,
@@ -150,7 +153,7 @@ and only clips it has not seen before are inspected, with a full pass every 30
 seconds as a safety net. On a 600-clip bin a check takes about 7 ms every two
 seconds — roughly 0.3 % of one CPU core — and about 32 MB of memory.
 
-Activity is logged to `~/.local/state/resolve-ready/watch.log`.
+Activity is logged to `~/.local/state/resolver/watch.log`.
 
 ### One thing to know: play it too early and it stays silent until you reopen
 
@@ -193,9 +196,11 @@ project if Resolve reports decode errors for a converted clip.
 - Subtitle and attachment streams are omitted.
 - Conversion happens in a hidden file beside the source. Only after it
   succeeds is the converted file published and the source kept under
-  `.resolve-ready-backups/`. For a file that keeps its name this is a single
+  `.resolver-backups/`. For a file that keeps its name this is a single
   atomic step, so the name never disappears, not even for a moment. If anything
   fails, the original stays where it was.
+- A folder that already has a `.resolve-ready-backups/` folder (the name used
+  before the app was renamed) keeps using it.
 - Existing backups are never overwritten; a later conversion uses
   `interview_backup_2.mp4`, then `_3`, and so on. If a source that becomes a
   MOV would overwrite an existing MOV, conversion stops without changing either
@@ -228,6 +233,6 @@ python3 -m unittest discover -v
 
 ---
 
-Resolve Ready is an independent project. It is not affiliated with or endorsed
+Resolver is an independent project. It is not affiliated with or endorsed
 by Blackmagic Design. DaVinci Resolve is a trademark of Blackmagic Design Pty.
 Ltd.

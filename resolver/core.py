@@ -47,7 +47,10 @@ class ConversionResult:
 
 
 ProgressCallback = Callable[[Progress], None]
-BACKUP_DIRECTORY_NAME = ".resolve-ready-backups"
+BACKUP_DIRECTORY_NAME = ".resolver-backups"
+# The folder name used while the app was called Resolve Ready. A folder that
+# already has one keeps using it, so backups never end up in two places.
+LEGACY_BACKUP_DIRECTORY_NAME = ".resolve-ready-backups"
 VIDEO_CODECS_REQUIRING_TRANSCODE = frozenset({"av1", "vp8", "vp9"})
 # Sources that keep their own name and container, so a project that already
 # references them (on this or a collaborator's machine) stays linked. MP4 holds
@@ -133,9 +136,19 @@ def probe_media(path: str | os.PathLike[str], ffprobe: str | None = None) -> Med
     )
 
 
+def backup_directory_for(source: str | os.PathLike[str]) -> Path:
+    """Return the backup folder for ``source``: the existing one, else the default."""
+    parent = Path(source).parent
+    current = parent / BACKUP_DIRECTORY_NAME
+    legacy = parent / LEGACY_BACKUP_DIRECTORY_NAME
+    if legacy.is_dir() and not current.exists():
+        return legacy
+    return current
+
+
 def next_backup_path(source: str | os.PathLike[str]) -> Path:
     source_path = Path(source)
-    backup_directory = source_path.parent / BACKUP_DIRECTORY_NAME
+    backup_directory = backup_directory_for(source_path)
     first = backup_directory / (
         f"{source_path.stem}_backup{source_path.suffix}"
     )
@@ -605,7 +618,7 @@ def _reserve_output(output: Path) -> None:
 
 def _link_source_to_backup(source: Path) -> Path | None:
     """Hard-link ``source`` into the backup folder, or return None if unsupported."""
-    _ensure_backup_directory(source.parent / BACKUP_DIRECTORY_NAME)
+    _ensure_backup_directory(backup_directory_for(source))
     while True:
         candidate = next_backup_path(source)
         try:
@@ -618,8 +631,7 @@ def _link_source_to_backup(source: Path) -> Path | None:
 
 
 def _move_source_to_backup(source: Path) -> Path:
-    backup_directory = source.parent / BACKUP_DIRECTORY_NAME
-    _ensure_backup_directory(backup_directory)
+    _ensure_backup_directory(backup_directory_for(source))
 
     while True:
         candidate = next_backup_path(source)
