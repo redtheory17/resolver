@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import fcntl
+import os
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -8,6 +11,7 @@ from unittest.mock import patch
 
 from resolver.core import BACKUP_DIRECTORY_NAME, ConversionResult, ResolverError
 from resolver.watch import (
+    _acquire_lock,
     DecodeFailureLog,
     ImportWatcher,
     WatchReport,
@@ -247,6 +251,19 @@ class WatcherTests(unittest.TestCase):
         )
         self.assertEqual(report.need_reopen, ["clip.mp4"])
 
+    def test_decode_errors_after_a_swap_are_flagged_for_reopen(self):
+        log = Path(self.directory.name) / "ResolveDebug.txt"
+        log.touch()
+        watcher = self.watcher(FakeConverter(), DecodeFailureLog(log))
+        clip = FakeClip("a", str(self.media), NOW)
+        self.assertEqual(self.poll(watcher, [clip]).need_reopen, [])
+        with log.open("a") as handle:
+            handle.write(f"x | Failed to decode clip <{self.media}>, track 0, frame 12: no\n")
+        self.assertEqual(self.poll(watcher, [clip]).need_reopen, ["clip.mp4"])
+        with log.open("a") as handle:
+            handle.write(f"x | Failed to decode clip <{self.media}>, track 0, frame 13: no\n")
+        self.assertEqual(self.poll(watcher, [clip]).need_reopen, [], "reported twice")
+
     def test_report_summary_mentions_reopen(self):
         report = WatchReport(converted=["a.mp4"], need_reopen=["a.mp4"])
         title, body = report.summary()
@@ -256,3 +273,23 @@ class WatcherTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LockTests(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.path = Path(directory.name) / "watch.lock"
+        self.holder = self.path.open("w")
+        self.addCleanup(self.holder.close)
+        fcntl.flock(self.holder, fcntl.LOCK_EX)
+
+    def test_waits_for_a_watcher_that_is_shutting_down(self):
+        threading.Timer(0.3, lambda: fcntl.flock(self.holder, fcntl.LOCK_UN)).start()
+        with self.path.open("w") as handle:
+            self.assertTrue(_acquire_lock(handle, os.getpid(), wait=10.0))
+
+    def test_gives_up_when_the_other_watcher_stays(self):
+        with self.path.open("w") as handle:
+            self.assertFalse(_acquire_lock(handle, os.getpid(), wait=0.2))
+            self.assertFalse(_acquire_lock(handle, None))

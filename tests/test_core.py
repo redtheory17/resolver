@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -134,6 +135,7 @@ class OutputNamingTests(unittest.TestCase):
 
             self.assertEqual(existing.read_bytes(), b"older backup")
             self.assertEqual(backup.name, "clip_backup_2.mp4")
+            self.assertEqual(backup.parent, backup_directory)
             self.assertEqual(backup.read_bytes(), b"original")
 
     def test_publish_refuses_to_replace_a_source_that_changed(self):
@@ -173,6 +175,54 @@ class OutputNamingTests(unittest.TestCase):
             self.assertFalse(
                 (Path(directory) / BACKUP_DIRECTORY_NAME / "clip_backup.mp4").exists()
             )
+
+    def test_same_name_publish_never_leaves_the_name_missing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "clip.mp4"
+            temporary = Path(directory) / ".clip.partial.mp4"
+            source.write_bytes(b"original")
+            temporary.write_bytes(b"converted")
+            seen = []
+            real_replace = os.replace
+
+            def watched_replace(old, new):
+                seen.append(source.exists())
+                real_replace(old, new)
+
+            with patch("resolver.core.os.replace", side_effect=watched_replace):
+                backup = _publish_mov(temporary, source, source)
+
+            self.assertEqual(seen, [True], "the original was moved away before the swap")
+            self.assertEqual(source.read_bytes(), b"converted")
+            self.assertEqual(backup.read_bytes(), b"original")
+            self.assertEqual(backup.parent.name, BACKUP_DIRECTORY_NAME)
+
+    def test_same_name_publish_moves_the_file_where_hard_links_are_missing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "clip.mp4"
+            temporary = Path(directory) / ".clip.partial.mp4"
+            source.write_bytes(b"original")
+            temporary.write_bytes(b"converted")
+
+            with patch("resolver.core.os.link", side_effect=OSError("not supported")):
+                backup = _publish_mov(temporary, source, source)
+
+            self.assertEqual(source.read_bytes(), b"converted")
+            self.assertEqual(backup.read_bytes(), b"original")
+
+    def test_failed_same_name_publish_leaves_original_and_no_backup(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "clip.mp4"
+            temporary = Path(directory) / ".clip.partial.mp4"
+            source.write_bytes(b"original")
+            temporary.write_bytes(b"converted")
+
+            with patch("resolver.core.os.replace", side_effect=OSError("no space")):
+                with self.assertRaisesRegex(OSError, "no space"):
+                    _publish_mov(temporary, source, source)
+
+            self.assertEqual(source.read_bytes(), b"original")
+            self.assertEqual(list((Path(directory) / BACKUP_DIRECTORY_NAME).iterdir()), [])
 
     def test_existing_mov_is_never_overwritten(self):
         with tempfile.TemporaryDirectory() as directory:

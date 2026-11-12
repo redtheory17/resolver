@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+from resolver import graft
+
 
 class ResolverError(RuntimeError):
     """A user-facing conversion error."""
@@ -142,7 +144,7 @@ def next_backup_path(source: str | os.PathLike[str]) -> Path:
 
     index = 2
     while True:
-        candidate = source_path.with_name(
+        candidate = backup_directory / (
             f"{source_path.stem}_backup_{index}{source_path.suffix}"
         )
         if not candidate.exists():
@@ -248,6 +250,40 @@ def build_ffmpeg_command(
     ]
 
 
+def build_audio_command(
+    source: Path,
+    temporary_output: Path,
+    ffmpeg: str = "ffmpeg",
+    *,
+    container: str = "mov",
+) -> list[str]:
+    """Build the command for the PCM audio that is grafted onto a source."""
+    return [
+        ffmpeg,
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-nostdin",
+        "-n",
+        "-i",
+        str(source),
+        "-map",
+        "0:a",
+        "-map_chapters",
+        "-1",
+        "-c:a",
+        "pcm_s24le",
+        "-filter:a",
+        "aresample=48000:async=1:first_pts=0",
+        "-f",
+        container,
+        "-progress",
+        "pipe:1",
+        "-nostats",
+        str(temporary_output),
+    ]
+
+
 def video_requires_transcode(codec: str) -> bool:
     """Return whether a source codec cannot be stream-copied into MOV."""
     return codec.casefold() in VIDEO_CODECS_REQUIRING_TRANSCODE
@@ -304,66 +340,32 @@ class Converter:
                 "Move or rename it and try again."
             )
         source_identity = _source_identity(info.path)
-        temporary = info.path.with_name(
-            f".{info.path.stem}.{uuid.uuid4().hex}.partial.{container}"
+        token = uuid.uuid4().hex
+        temporary = info.path.with_name(f".{info.path.stem}.{token}.partial.{container}")
+        audio_temporary = info.path.with_name(
+            f".{info.path.stem}.{token}.partial.audio.{container}"
         )
-        command = build_ffmpeg_command(
-            info.path,
-            temporary,
-            self.ffmpeg,
-            container=container,
-            transcode_video=transcode_video,
-            high_bit_depth=video_requires_high_bit_depth(info),
-            color_range=info.color_range,
-            color_space=info.color_space,
-            color_transfer=info.color_transfer,
-            color_primaries=info.color_primaries,
-        )
-        recent_output: list[str] = []
 
         try:
-            process = subprocess.Popen(
-                command,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                bufsize=1,
+            # A file that keeps its name may already be open in Resolve, so its
+            # video must stay where it is in the file (see resolver.graft).
+            grafted = output == info.path and self._graft(
+                info, container, audio_temporary, temporary, progress_callback
             )
-            with self._lock:
-                self._process = process
-                if self._cancel_requested.is_set():
-                    process.terminate()
-
-            assert process.stdout is not None
-            for raw_line in process.stdout:
-                line = raw_line.strip()
-                if line:
-                    recent_output.append(line)
-                    recent_output = recent_output[-100:]
-                if line.startswith("out_time_us="):
-                    try:
-                        seconds = int(line.partition("=")[2]) / 1_000_000
-                    except ValueError:
-                        continue
-                    fraction = (
-                        min(1.0, seconds / info.duration_seconds)
-                        if info.duration_seconds
-                        else 0.0
-                    )
-                    if progress_callback:
-                        progress_callback(Progress(fraction, seconds))
-
-            return_code = process.wait()
-            with self._lock:
-                self._process = None
-
-            if return_code < 0:
-                raise ConversionCancelled("Conversion cancelled.")
-            if return_code != 0:
-                message = _extract_ffmpeg_error(recent_output)
-                raise ResolverError(f"FFmpeg could not convert {info.path.name}: {message}")
+            if not grafted:
+                command = build_ffmpeg_command(
+                    info.path,
+                    temporary,
+                    self.ffmpeg,
+                    container=container,
+                    transcode_video=transcode_video,
+                    high_bit_depth=video_requires_high_bit_depth(info),
+                    color_range=info.color_range,
+                    color_space=info.color_space,
+                    color_transfer=info.color_transfer,
+                    color_primaries=info.color_primaries,
+                )
+                self._run_ffmpeg(command, info, progress_callback)
             if not temporary.is_file():
                 raise ResolverError("FFmpeg finished without creating an output file.")
             if self._cancel_requested.is_set():
@@ -378,10 +380,145 @@ class Converter:
         finally:
             with self._lock:
                 self._process = None
-            try:
-                temporary.unlink(missing_ok=True)
-            except OSError:
-                pass
+            for leftover in (temporary, audio_temporary):
+                try:
+                    leftover.unlink(missing_ok=True)
+                except OSError:
+                    pass
+
+    def _run_ffmpeg(
+        self,
+        command: list[str],
+        info: MediaInfo,
+        progress_callback: ProgressCallback | None,
+        share: float = 1.0,
+    ) -> None:
+        """Run FFmpeg, reporting progress as ``share`` of the whole conversion."""
+        recent_output: list[str] = []
+        process = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            bufsize=1,
+        )
+        with self._lock:
+            self._process = process
+            if self._cancel_requested.is_set():
+                process.terminate()
+
+        assert process.stdout is not None
+        for raw_line in process.stdout:
+            line = raw_line.strip()
+            if line:
+                recent_output.append(line)
+                recent_output = recent_output[-100:]
+            if line.startswith("out_time_us="):
+                try:
+                    seconds = int(line.partition("=")[2]) / 1_000_000
+                except ValueError:
+                    continue
+                fraction = (
+                    min(1.0, seconds / info.duration_seconds)
+                    if info.duration_seconds
+                    else 0.0
+                )
+                if progress_callback:
+                    progress_callback(Progress(fraction * share, seconds * share))
+
+        process.stdout.close()
+        return_code = process.wait()
+        with self._lock:
+            self._process = None
+
+        if return_code < 0:
+            raise ConversionCancelled("Conversion cancelled.")
+        if return_code != 0:
+            message = _extract_ffmpeg_error(recent_output)
+            raise ResolverError(f"FFmpeg could not convert {info.path.name}: {message}")
+
+    def _graft(
+        self,
+        info: MediaInfo,
+        container: str,
+        audio_temporary: Path,
+        temporary: Path,
+        progress_callback: ProgressCallback | None,
+    ) -> bool:
+        """Write ``temporary`` as the source plus PCM audio, video left in place.
+
+        Returns False when the file's structure rules that out, in which case
+        nothing is left behind and the caller remuxes the file instead.
+        """
+        try:
+            graft.check_source(info.path)
+        except graft.GraftUnsupported:
+            return False
+        self._run_ffmpeg(
+            build_audio_command(info.path, audio_temporary, self.ffmpeg, container=container),
+            info,
+            progress_callback,
+            share=0.5,
+        )
+        if self._cancel_requested.is_set():
+            raise ConversionCancelled("Conversion cancelled.")
+
+        def report(fraction: float) -> None:
+            if progress_callback:
+                done = 0.5 + 0.5 * fraction
+                progress_callback(Progress(done, done * info.duration_seconds))
+
+        try:
+            graft.graft_audio(
+                info.path,
+                audio_temporary,
+                temporary,
+                cancelled=self._cancel_requested.is_set,
+                progress=report,
+            )
+            usable = self._graft_is_sound(temporary, info)
+        except graft.GraftCancelled as exc:
+            raise ConversionCancelled("Conversion cancelled.") from exc
+        except graft.GraftUnsupported:
+            usable = False
+        finally:
+            audio_temporary.unlink(missing_ok=True)
+        if not usable:
+            temporary.unlink(missing_ok=True)
+        return usable
+
+    def _graft_is_sound(self, candidate: Path, info: MediaInfo) -> bool:
+        """Check that FFmpeg reads the grafted file as the source with PCM audio."""
+        try:
+            result = subprocess.run(
+                [
+                    self.ffprobe,
+                    "-v",
+                    "error",
+                    "-show_entries",
+                    "stream=codec_type,codec_name",
+                    "-of",
+                    "json",
+                    str(candidate),
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            streams = json.loads(result.stdout).get("streams", [])
+        except (subprocess.SubprocessError, json.JSONDecodeError):
+            return False
+        video = [s for s in streams if s.get("codec_type") == "video"]
+        audio = [s for s in streams if s.get("codec_type") == "audio"]
+        return (
+            bool(video)
+            and video[0].get("codec_name") == info.video_codec
+            and len(audio) == info.audio_streams
+            and all(str(s.get("codec_name", "")).startswith("pcm_") for s in audio)
+        )
 
 
 def _source_identity(source: Path) -> tuple[int, int, int, int]:
@@ -426,6 +563,19 @@ def _publish_mov(
         _fsync_directory(source.parent)
         return backup
 
+    # Preferred: give the original a second name in the backup folder, then put
+    # the converted file over the first in one step. The name never goes
+    # missing, so a program that has the file open (Resolve) cannot hit a gap.
+    backup = _link_source_to_backup(source)
+    if backup is not None:
+        try:
+            os.replace(temporary, source)
+        except BaseException:
+            backup.unlink(missing_ok=True)
+            raise
+        _fsync_directory(source.parent)
+        return backup
+
     backup = _move_source_to_backup(source)
     try:
         os.replace(temporary, source)
@@ -451,6 +601,20 @@ def _reserve_output(output: Path) -> None:
             f"Cannot create {output.name} because that file already exists. "
             "Move or rename it and try again."
         ) from exc
+
+
+def _link_source_to_backup(source: Path) -> Path | None:
+    """Hard-link ``source`` into the backup folder, or return None if unsupported."""
+    _ensure_backup_directory(source.parent / BACKUP_DIRECTORY_NAME)
+    while True:
+        candidate = next_backup_path(source)
+        try:
+            os.link(source, candidate)
+            return candidate
+        except FileExistsError:
+            continue
+        except OSError:
+            return None  # the filesystem has no hard links; move the file instead
 
 
 def _move_source_to_backup(source: Path) -> Path:

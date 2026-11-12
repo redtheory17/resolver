@@ -38,6 +38,9 @@ It fixes the file instead of the application:
 - **Video is copied, not re-encoded.** A conversion takes about as long as
   copying the file, and the picture is identical to the source. (AV1, VP8 and
   VP9 are the exception — see [Conversion details](#conversion-details).)
+- **Video is not even moved.** In an MP4 or MOV the new audio is appended and
+  every video frame stays at the same position in the file, so a Resolve
+  project that has the clip open keeps playing it without a hiccup.
 - **The file keeps its name.** `clip.mp4` stays `clip.mp4`: the PCM audio is
   stored in the MP4 as a standard `ipcm` track. A project that already
   references the file stays linked, on your machine and for collaborators who
@@ -158,11 +161,29 @@ that session. Reopening the project fixes it. The watcher detects this from
 Resolve's log and names those clips in its notification. For long files, give
 the conversion a moment before you start cutting.
 
+### Why the video is left exactly where it is
+
+Resolve also keeps its video decoders per file path, together with the frame
+positions they read from the file. A decoder created in the instant between the
+file being swapped and Resolve being refreshed combines the old positions with
+the new file. If the video had moved, that decoder would read the wrong bytes
+for the rest of the session and Resolve would flash "Media Offline" on a share
+of the frames. Because a converted MP4 or MOV keeps every video frame at its
+original position, such a decoder reads exactly what it expects. The watcher
+still follows Resolve's log after each conversion and tells you to reopen the
+project if Resolve reports decode errors for a converted clip.
+
 ## Conversion details
 
 - The first video stream is copied untouched when the container supports it.
 - MP4, M4V and MOV sources keep their exact name and container. Other
   containers become a MOV with the source's base name.
+- For MP4, M4V and MOV the file is extended rather than rewritten: the source is
+  copied byte for byte, the PCM audio is appended, and a new index at the end
+  replaces the audio tracks. All other tracks (video, timecode, chapters) and
+  the file's metadata are kept as they were. The old compressed audio stays in
+  the file as unused data, about 1 MB per minute. Fragmented or otherwise
+  unusual files are remuxed with FFmpeg instead.
 - AV1, VP8 and VP9 video is transcoded to DNxHR in a MOV: 10-bit DNxHR HQX for
   HDR and other high-bit-depth sources (colour tags are kept), DNxHR HQ
   otherwise. These files get much larger.
@@ -170,9 +191,11 @@ the conversion a moment before you start cutting.
 - Global metadata, video-stream metadata, timecode, chapters and rotation are
   retained where the container supports them.
 - Subtitle and attachment streams are omitted.
-- Conversion happens in a hidden file beside the source. Only after FFmpeg
-  succeeds is the converted file published and the source moved under
-  `.resolve-ready-backups/`. If anything fails, the original stays where it was.
+- Conversion happens in a hidden file beside the source. Only after it
+  succeeds is the converted file published and the source kept under
+  `.resolve-ready-backups/`. For a file that keeps its name this is a single
+  atomic step, so the name never disappears, not even for a moment. If anything
+  fails, the original stays where it was.
 - Existing backups are never overwritten; a later conversion uses
   `interview_backup_2.mp4`, then `_3`, and so on. If a source that becomes a
   MOV would overwrite an existing MOV, conversion stops without changing either

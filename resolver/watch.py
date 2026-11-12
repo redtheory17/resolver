@@ -39,6 +39,9 @@ POLL_SECONDS = 2.0
 FULL_RESCAN_SECONDS = 30.0
 # "Date Added" has one-second resolution and Resolve's clock is ours.
 DATE_ADDED_SLACK_SECONDS = 2.0
+# A relaunched Resolve starts its watcher while the previous one is still
+# noticing that its Resolve has gone, so wait for the lock instead of leaving.
+LOCK_WAIT_SECONDS = 60.0
 _MONTHS = {
     name: number
     for number, name in enumerate(
@@ -126,7 +129,7 @@ def probe_audio(path: str, ffprobe: str) -> tuple[list[str], str, bool]:
 
 
 class DecodeFailureLog:
-    """Follows Resolve's debug log for audio decode failures."""
+    """Follows Resolve's debug log for audio and video decode failures."""
 
     MARKER = "Failed to decode clip <"
 
@@ -180,7 +183,7 @@ class WatchReport:
             lines.append(", ".join(self.converted[:4]) + ("…" if count > 4 else ""))
         if self.need_reopen:
             lines.append(
-                "Reopen the project to hear: "
+                "Reopen the project to fix: "
                 + ", ".join(self.need_reopen[:4])
                 + ("…" if len(self.need_reopen) > 4 else "")
             )
@@ -251,6 +254,8 @@ class ImportWatcher:
         self._converted: dict[str, str] = {}
         # (clip, path, attempts): clips whose metadata still names the old codec
         self._relabel: list[tuple[object, str, int]] = []
+        # Same-name conversions, watched for decode errors Resolve logs later.
+        self._swapped: set[str] = set()
 
     # -- media pool walking -------------------------------------------------
 
@@ -345,6 +350,24 @@ class ImportWatcher:
                 self.failure_log.forget(path)
                 self.log(f"{path} was played before conversion; needs a project reopen")
                 report.need_reopen.append(name)
+            else:
+                self._swapped.add(path)
+
+    def _check_swapped(self, report: WatchReport) -> None:
+        """Report files Resolve fails to decode after they were swapped.
+
+        Resolve keeps the readers it made for the old file. The conversion is
+        built so that they still work, but when they do not, only reopening the
+        project replaces them.
+        """
+        if self.failure_log is None or not self._swapped:
+            return
+        self.failure_log.refresh()
+        for path in sorted(self._swapped & self.failure_log.failed):
+            self._swapped.discard(path)
+            self.failure_log.forget(path)
+            self.log(f"Resolve reports decode errors for {path} after conversion")
+            report.need_reopen.append(Path(path).name)
 
     def _refresh_labels(self) -> None:
         """Make the clip's metadata name the new codec.
@@ -365,6 +388,7 @@ class ImportWatcher:
     def poll(self, resolve) -> WatchReport:
         report = WatchReport()
         self._refresh_labels()
+        self._check_swapped(report)
         project_manager = resolve.GetProjectManager()
         project = project_manager.GetCurrentProject() if project_manager else None
         if project is None:
@@ -414,13 +438,24 @@ def _pid_alive(pid: int) -> bool:
     return True
 
 
+def _acquire_lock(handle, resolve_pid: int | None, wait: float = LOCK_WAIT_SECONDS) -> bool:
+    """Take the single-watcher lock, outwaiting a watcher that is shutting down."""
+    deadline = time.monotonic() + (wait if resolve_pid is not None else 0.0)
+    while True:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except OSError:
+            if time.monotonic() >= deadline or not _pid_alive(resolve_pid):
+                return False
+            time.sleep(0.5)
+
+
 def watch_resolve(resolve_pid: int | None = None) -> int:
     """Run until Resolve (``resolve_pid``) exits. Returns a process exit code."""
     runtime = Path(os.environ.get("XDG_RUNTIME_DIR") or "/tmp")
     lock_handle = (runtime / "resolve-ready-watch.lock").open("w")
-    try:
-        fcntl.flock(lock_handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
+    if not _acquire_lock(lock_handle, resolve_pid):
         return 0  # another watcher already serves this session
 
     state = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state")
